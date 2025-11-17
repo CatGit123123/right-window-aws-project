@@ -55,6 +55,9 @@ def lambda_handler(event, context):
     # Create a variable to track the temporary directory for cleanup in finally block
     temp_output_dir = None
     
+    # Get the expected bucket owner from environment variable for security
+    expected_bucket_owner = os.environ.get('EXPECTED_BUCKET_OWNER', '')
+    
     try:
         # 1) Extract bucket/key from the S3 event
         print(f"Received event: {json.dumps(event)}")
@@ -115,7 +118,10 @@ def lambda_handler(event, context):
         for output_check_key in output_check_keys:
             try:
                 # Try to head the object - if it exists, we've already processed this file
-                s3.head_object(Bucket=bucket, Key=output_check_key)
+                head_params = {'Bucket': bucket, 'Key': output_check_key}
+                if expected_bucket_owner:
+                    head_params['ExpectedBucketOwner'] = expected_bucket_owner
+                s3.head_object(**head_params)
                 print(f"[INFO] Output already exists at s3://{bucket}/{output_check_key}, skipping processing")
                 output_exists = True
                 break
@@ -136,7 +142,10 @@ def lambda_handler(event, context):
         # 2) Download PDF to /tmp with sanitized filename for processing
         local_in = f"/tmp/{sanitized_filename}"
         try:
-            s3.download_file(bucket, key, local_in)
+            extra_args = {}
+            if expected_bucket_owner:
+                extra_args['ExpectedBucketOwner'] = expected_bucket_owner
+            s3.download_file(bucket, key, local_in, ExtraArgs=extra_args if extra_args else None)
             print(f"[INFO] Downloaded s3://{bucket}/{key} to {local_in}")
         except Exception as e:
             print(f"[ERROR] Failed to download s3://{bucket}/{key}: {e}")
@@ -184,7 +193,10 @@ def lambda_handler(event, context):
             
             if os.path.exists(index_html_path):
                 index_s3_key = f"output/{filename_base}.html"
-                s3.upload_file(index_html_path, bucket, index_s3_key)
+                extra_args = {}
+                if expected_bucket_owner:
+                    extra_args['ExpectedBucketOwner'] = expected_bucket_owner
+                s3.upload_file(index_html_path, bucket, index_s3_key, ExtraArgs=extra_args if extra_args else None)
                 print(f"[INFO] Uploaded index.html to s3://{bucket}/{index_s3_key}")
             else:
                 print(f"[WARNING] No index.html found in output directory")
@@ -203,7 +215,10 @@ def lambda_handler(event, context):
                     # List all objects in the prefix
                     objects_to_delete = []
                     paginator = s3.get_paginator('list_objects_v2')
-                    for page in paginator.paginate(Bucket=bucket, Prefix=bda_processing_prefix):
+                    paginate_params = {'Bucket': bucket, 'Prefix': bda_processing_prefix}
+                    if expected_bucket_owner:
+                        paginate_params['ExpectedBucketOwner'] = expected_bucket_owner
+                    for page in paginator.paginate(**paginate_params):
                         if 'Contents' in page:
                             for obj in page['Contents']:
                                 objects_to_delete.append({'Key': obj['Key']})
@@ -211,10 +226,13 @@ def lambda_handler(event, context):
                     # Delete in batches of 1000 (S3 limit)
                     if objects_to_delete:
                         for i in range(0, len(objects_to_delete), 1000):
-                            response = s3.delete_objects(
-                                Bucket=bucket,
-                                Delete={'Objects': objects_to_delete[i:i+1000]}
-                            )
+                            delete_params = {
+                                'Bucket': bucket,
+                                'Delete': {'Objects': objects_to_delete[i:i+1000]}
+                            }
+                            if expected_bucket_owner:
+                                delete_params['ExpectedBucketOwner'] = expected_bucket_owner
+                            response = s3.delete_objects(**delete_params)
                             print(f"[INFO] Deleted {len(response.get('Deleted', []))} files from {bda_processing_prefix}")
                     else:
                         print(f"[INFO] No files found to delete in {bda_processing_prefix}")
@@ -222,7 +240,10 @@ def lambda_handler(event, context):
                     # Clean up the BDA input file
                     bda_input_key = f"bda-inputs/{sanitized_filename}"
                     try:
-                        s3.delete_object(Bucket=bucket, Key=bda_input_key)
+                        delete_params = {'Bucket': bucket, 'Key': bda_input_key}
+                        if expected_bucket_owner:
+                            delete_params['ExpectedBucketOwner'] = expected_bucket_owner
+                        s3.delete_object(**delete_params)
                         print(f"[INFO] Deleted BDA input file: s3://{bucket}/{bda_input_key}")
                     except Exception as e:
                         print(f"[WARNING] Failed to delete BDA input file: {e}")
@@ -234,7 +255,10 @@ def lambda_handler(event, context):
                         
                         # List all objects in the old output prefix
                         old_objects_to_delete = []
-                        for page in paginator.paginate(Bucket=bucket, Prefix=old_output_prefix):
+                        old_paginate_params = {'Bucket': bucket, 'Prefix': old_output_prefix}
+                        if expected_bucket_owner:
+                            old_paginate_params['ExpectedBucketOwner'] = expected_bucket_owner
+                        for page in paginator.paginate(**old_paginate_params):
                             if 'Contents' in page:
                                 for obj in page['Contents']:
                                     # Don't delete the main zip file
@@ -244,10 +268,13 @@ def lambda_handler(event, context):
                         # Delete in batches of 1000 (S3 limit)
                         if old_objects_to_delete:
                             for i in range(0, len(old_objects_to_delete), 1000):
-                                response = s3.delete_objects(
-                                    Bucket=bucket,
-                                    Delete={'Objects': old_objects_to_delete[i:i+1000]}
-                                )
+                                old_delete_params = {
+                                    'Bucket': bucket,
+                                    'Delete': {'Objects': old_objects_to_delete[i:i+1000]}
+                                }
+                                if expected_bucket_owner:
+                                    old_delete_params['ExpectedBucketOwner'] = expected_bucket_owner
+                                response = s3.delete_objects(**old_delete_params)
                                 print(f"[INFO] Deleted {len(response.get('Deleted', []))} old output files from {old_output_prefix}")
                         else:
                             print(f"[INFO] No old output files found to delete in {old_output_prefix}")
@@ -274,7 +301,10 @@ def lambda_handler(event, context):
             # Upload zip to the output folder so head_object can detect it
             # This MUST match the path we check in the idempotency check above
             output_s3_key = f"output/{filename_base}.zip"
-            s3.upload_file(zip_path, bucket, output_s3_key)
+            extra_args = {}
+            if expected_bucket_owner:
+                extra_args['ExpectedBucketOwner'] = expected_bucket_owner
+            s3.upload_file(zip_path, bucket, output_s3_key, ExtraArgs=extra_args if extra_args else None)
             print(f"[INFO] Uploaded complete zip file to s3://{bucket}/{output_s3_key}")
             
             # Create a separate "final" zip for the remediated folder with only specific files
@@ -308,7 +338,10 @@ def lambda_handler(event, context):
             
             # Upload the final zip to the remediated folder
             remediated_s3_key = f"remediated/final_{filename_base}.zip"
-            s3.upload_file(final_zip_path, bucket, remediated_s3_key)
+            extra_args = {}
+            if expected_bucket_owner:
+                extra_args['ExpectedBucketOwner'] = expected_bucket_owner
+            s3.upload_file(final_zip_path, bucket, remediated_s3_key, ExtraArgs=extra_args if extra_args else None)
             print(f"[INFO] Uploaded final zip file to s3://{bucket}/{remediated_s3_key}")
                 
         except Exception as e:

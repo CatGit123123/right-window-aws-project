@@ -35,6 +35,7 @@ sqs = boto3.client("sqs")
 # Constants
 DEFAULT_REGION = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or os.environ.get("CDK_DEFAULT_REGION")
 JOB_STATUS_TABLE = os.environ.get("JOB_STATUS_TABLE", "DocumentAccessibilityJobs")
+EXPECTED_BUCKET_OWNER = os.environ.get("EXPECTED_BUCKET_OWNER", "")
 
 # Job status constants
 STATUS_PENDING = "PENDING"
@@ -201,7 +202,10 @@ def download_from_s3(bucket: str, key: str, local_path: str) -> str:
     os.makedirs(os.path.dirname(local_path), exist_ok=True)
 
     logger.debug("Downloading s3://%s/%s to %s", bucket, key, local_path)
-    s3_client.download_file(bucket, key, local_path)
+    extra_args = {}
+    if EXPECTED_BUCKET_OWNER:
+        extra_args['ExpectedBucketOwner'] = EXPECTED_BUCKET_OWNER
+    s3_client.download_file(bucket, key, local_path, ExtraArgs=extra_args if extra_args else None)
 
     return local_path
 
@@ -226,8 +230,10 @@ def upload_to_s3(
     extra_args = {}
     if metadata:
         extra_args["Metadata"] = metadata
+    if EXPECTED_BUCKET_OWNER:
+        extra_args["ExpectedBucketOwner"] = EXPECTED_BUCKET_OWNER
 
-    s3_client.upload_file(local_path, bucket, key, ExtraArgs=extra_args)
+    s3_client.upload_file(local_path, bucket, key, ExtraArgs=extra_args if extra_args else None)
 
     return {"bucket": bucket, "key": key}
 
@@ -397,10 +403,12 @@ def upload_directory_to_s3(local_dir: str, bucket: str, prefix: str) -> List[Dic
             extra_args = {}
             if content_type:
                 extra_args['ContentType'] = content_type
+            if EXPECTED_BUCKET_OWNER:
+                extra_args['ExpectedBucketOwner'] = EXPECTED_BUCKET_OWNER
             
             try:
                 # Upload the file
-                s3_client.upload_file(local_path, bucket, s3_key, ExtraArgs=extra_args)
+                s3_client.upload_file(local_path, bucket, s3_key, ExtraArgs=extra_args if extra_args else None)
                 uploaded_files.append({"bucket": bucket, "key": s3_key})
                 logger.debug(f"Uploaded {local_path} to s3://{bucket}/{s3_key}")
             except Exception as e:

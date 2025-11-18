@@ -1,5 +1,5 @@
 # Use an official Python runtime as a parent image with updated base
-FROM python:3.10-slim-bookworm
+FROM public.ecr.aws/docker/library/python:3.10-slim-bookworm
 
 # Create a non-root user
 RUN useradd -m -u 1000 appuser

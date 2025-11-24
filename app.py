@@ -86,8 +86,13 @@ class PDFAccessibility(Stack):
             resources=["*"],
         ))
         ecs_task_role.add_to_policy(iam.PolicyStatement(
-            actions=["s3:*"],  # This gives access to all S3 actions
-            resources=["*"],   # This applies the actions to all resources
+            actions=["s3:GetObject",
+                     "s3:PutObject",
+                     "s3:DeleteObject",
+                      "s3:ListBucket",
+                     "s3:GetBucketNotification",
+                     "s3:PutBucketNotification"],  # This Limits given S3 permissions
+            resources=[""],   # This applies the actions to all resources
         ))
         ecs_task_role.add_to_policy(iam.PolicyStatement(actions=
                                                         ["secretsmanager:GetSecretValue"], 
